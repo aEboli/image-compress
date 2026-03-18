@@ -1,0 +1,20 @@
+{
+    "geometry": "960x640",
+    "window_x": 68,
+    "window_y": 215,
+    "target_size": "1.0",
+    "min_size": "0.1",
+    "output_format": "JPEG",
+    "quality_slider": 100,
+    "prefix": "",
+    "suffix": "",
+    "rename_skipped": false,
+    "custom_output_enabled": false,
+    "custom_output_path": "",
+    "resize_enabled": false,
+    "resize_width": "2000",
+    "resize_height": "2000",
+    "auto_open_folder": false,
+    "theme_mode": "Dark",
+    "last_folders": []
+}
