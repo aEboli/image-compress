@@ -18,11 +18,41 @@ from settings_manager import SettingsManager
 
 # ── 常量 ─────────────────────────────────────────────────────
 EXPORT_FORMATS = ["Original", "JPEG", "PNG", "WEBP", "BMP", "TIFF", "GIF"]
-MIN_WIN_W, MIN_WIN_H = 960, 640
+MIN_WIN_W, MIN_WIN_H = 1180, 760
 FILE_DISPLAY_LIMIT = 500
+SIDEBAR_W = 270
+CONTROL_W = 210
 
 # 尝试加载自定义主题
 _theme_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "haze_theme.json")
+
+
+def parse_dnd_paths(data: str) -> list[str]:
+    """解析 TkDND 返回的文件/文件夹路径列表。"""
+    paths: list[str] = []
+    i = 0
+    n = len(data)
+
+    while i < n:
+        while i < n and data[i].isspace():
+            i += 1
+        if i >= n:
+            break
+
+        if data[i] == "{":
+            end = data.find("}", i + 1)
+            if end == -1:
+                paths.append(data[i + 1:].strip())
+                break
+            paths.append(data[i + 1:end])
+            i = end + 1
+        else:
+            start = i
+            while i < n and not data[i].isspace():
+                i += 1
+            paths.append(data[start:i])
+
+    return [p for p in paths if p]
 
 
 class ImageCompressorApp(ctk.CTk):
@@ -45,7 +75,7 @@ class ImageCompressorApp(ctk.CTk):
 
         # ── 窗口基本属性 ─────────────────────────────────────
         self.title("🖼 图片压缩工具 v2.0")
-        self.geometry(s.get("geometry", "1050x720"))
+        self.geometry(s.get("geometry", "1180x760"))
         self.minsize(MIN_WIN_W, MIN_WIN_H)
 
         # 恢复窗口位置
@@ -66,6 +96,8 @@ class ImageCompressorApp(ctk.CTk):
         self.processing = False
         self._thumbnail_cache: dict[str, ImageTk.PhotoImage] = {}
         self._file_widgets: list[ctk.CTkFrame] = []
+        self._dnd_files_type = None
+        self._dnd_enabled = False
 
         # ── 布局 ─────────────────────────────────────────────
         self.grid_columnconfigure(0, weight=0)  # 侧边栏
@@ -80,13 +112,13 @@ class ImageCompressorApp(ctk.CTk):
     # ══════════════════════════════════════════════════════════
 
     def _build_sidebar(self, s: dict):
-        sidebar = ctk.CTkScrollableFrame(self, width=250, corner_radius=0)
+        sidebar = ctk.CTkScrollableFrame(self, width=SIDEBAR_W, corner_radius=0)
         sidebar.grid(row=0, column=0, sticky="nsew")
         sidebar.grid_columnconfigure(0, weight=1)
 
         # ── 标题区 ────────────────────────────────────────────
         header = ctk.CTkFrame(sidebar, fg_color="transparent")
-        header.grid(row=0, column=0, padx=12, pady=(12, 0), sticky="ew")
+        header.grid(row=0, column=0, padx=10, pady=(10, 0), sticky="ew")
         header.grid_columnconfigure(0, weight=1)
 
         ctk.CTkLabel(
@@ -107,173 +139,117 @@ class ImageCompressorApp(ctk.CTk):
         ctk.CTkLabel(
             sidebar, text="高效 · 批量 · 智能压缩",
             font=ctk.CTkFont(size=11), text_color="gray",
-        ).grid(row=1, column=0, padx=16, pady=(2, 8), sticky="w")
+        ).grid(row=1, column=0, padx=14, pady=(2, 6), sticky="w")
 
-        # ── TabView 设置面板 ──────────────────────────────────
-        self.tab_view = ctk.CTkTabview(sidebar, height=460)
-        self.tab_view.grid(row=2, column=0, padx=8, pady=(0, 8), sticky="nsew")
+        settings_panel = ctk.CTkFrame(sidebar, fg_color="transparent")
+        settings_panel.grid(row=2, column=0, padx=4, pady=(0, 6), sticky="ew")
+        settings_panel.grid_columnconfigure(0, weight=1)
 
-        tab_compress = self.tab_view.add("压缩设置")
-        tab_advanced = self.tab_view.add("高级选项")
+        self._build_settings_panel(settings_panel, s)
 
-        tab_compress.grid_columnconfigure(0, weight=1)
-        tab_advanced.grid_columnconfigure(0, weight=1)
-
-        self._build_compress_tab(tab_compress, s)
-        self._build_advanced_tab(tab_advanced, s)
-
-    def _build_compress_tab(self, parent, s: dict):
-        """压缩设置标签页"""
+    def _build_settings_panel(self, parent, s: dict):
+        """设置面板"""
         row = 0
-
-        # ── 导出格式 ─────────────────────────────────────────
-        self._section_label(parent, "📦 导出格式", row)
-        row += 1
-
         self.var_format = tk.StringVar(value=s.get("output_format", "Original"))
         ctk.CTkOptionMenu(
-            parent, values=EXPORT_FORMATS, variable=self.var_format, width=220
-        ).grid(row=row, column=0, padx=12, pady=(2, 10), sticky="w")
+            parent, values=EXPORT_FORMATS, variable=self.var_format, width=CONTROL_W
+        ).grid(row=row, column=0, padx=10, pady=(1, 6), sticky="w")
         row += 1
 
-        # ── 目标大小 ─────────────────────────────────────────
-        self._section_label(parent, "🎯 目标大小 (MB)", row)
+        # ── 目标文件大小 ─────────────────────────────────────
+        self._section_label(parent, "🎯 目标文件大小 (MB)", row)
         row += 1
 
         hint_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        hint_frame.grid(row=row, column=0, padx=12, pady=(0, 0), sticky="ew")
+        hint_frame.grid(row=row, column=0, padx=10, pady=(0, 0), sticky="ew")
         ctk.CTkLabel(hint_frame, text="设为 0 不限制大小", font=ctk.CTkFont(size=10), text_color="gray").pack(side="left")
 
         row += 1
         self.var_target = tk.StringVar(value=s.get("target_size", "1.0"))
-        ctk.CTkEntry(parent, textvariable=self.var_target, width=220, placeholder_text="例如 1.0").grid(
-            row=row, column=0, padx=12, pady=(2, 10), sticky="w"
-        )
-        row += 1
-
-        # ── JPEG 质量滑块 ────────────────────────────────────
-        self._section_label(parent, "🔧 压缩质量（仅 JPEG / WEBP）", row)
-        row += 1
-
-        quality_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        quality_frame.grid(row=row, column=0, padx=12, pady=(2, 4), sticky="ew")
-        quality_frame.grid_columnconfigure(0, weight=1)
-
-        self.var_quality = tk.IntVar(value=s.get("quality_slider", 85))
-        self.quality_slider = ctk.CTkSlider(
-            quality_frame, from_=1, to=100, number_of_steps=99,
-            variable=self.var_quality, command=self._on_quality_change,
-            width=170,
-        )
-        self.quality_slider.grid(row=0, column=0, sticky="ew", padx=(0, 8))
-
-        self.lbl_quality = ctk.CTkLabel(
-            quality_frame, text=f"{self.var_quality.get()}%",
-            font=ctk.CTkFont(size=13, weight="bold"), width=45,
-        )
-        self.lbl_quality.grid(row=0, column=1, sticky="e")
-        row += 1
-
-        ctk.CTkLabel(parent, text="目标大小 > 0 时将优先使用目标大小", font=ctk.CTkFont(size=10), text_color="gray").grid(
-            row=row, column=0, padx=12, pady=(0, 10), sticky="w"
+        ctk.CTkEntry(parent, textvariable=self.var_target, width=CONTROL_W, placeholder_text="例如 1.0").grid(
+            row=row, column=0, padx=10, pady=(1, 6), sticky="w"
         )
         row += 1
 
         # ── 忽略小文件 ───────────────────────────────────────
         self._section_label(parent, "⏭ 忽略小于 (MB)", row)
         row += 1
-
         ctk.CTkLabel(parent, text="设为 0 不忽略", font=ctk.CTkFont(size=10), text_color="gray").grid(
-            row=row, column=0, padx=12, pady=(0, 0), sticky="w"
+            row=row, column=0, padx=10, pady=(0, 0), sticky="w"
         )
         row += 1
 
         self.var_min = tk.StringVar(value=s.get("min_size", "0.1"))
-        ctk.CTkEntry(parent, textvariable=self.var_min, width=220, placeholder_text="例如 0.1").grid(
-            row=row, column=0, padx=12, pady=(2, 10), sticky="w"
+        ctk.CTkEntry(parent, textvariable=self.var_min, width=CONTROL_W, placeholder_text="例如 0.1").grid(
+            row=row, column=0, padx=10, pady=(1, 6), sticky="w"
         )
-
-    def _build_advanced_tab(self, parent, s: dict):
-        """高级选项标签页"""
-        row = 0
-
-        # ── 重命名规则 ───────────────────────────────────────
-        self._section_label(parent, "✏️ 重命名规则", row)
         row += 1
 
         ctk.CTkLabel(parent, text="前缀 (留空默认 __)", font=ctk.CTkFont(size=11)).grid(
-            row=row, column=0, padx=12, pady=(2, 0), sticky="w"
+            row=row, column=0, padx=10, pady=(1, 0), sticky="w"
         )
         row += 1
         self.var_prefix = tk.StringVar(value=s.get("prefix", ""))
-        ctk.CTkEntry(parent, textvariable=self.var_prefix, width=220, placeholder_text="例如 compressed_").grid(
-            row=row, column=0, padx=12, pady=(2, 4), sticky="w"
+        ctk.CTkEntry(parent, textvariable=self.var_prefix, width=CONTROL_W, placeholder_text="例如 compressed_").grid(
+            row=row, column=0, padx=10, pady=(1, 4), sticky="w"
         )
         row += 1
 
         ctk.CTkLabel(parent, text="后缀 (可选)", font=ctk.CTkFont(size=11)).grid(
-            row=row, column=0, padx=12, pady=(2, 0), sticky="w"
+            row=row, column=0, padx=10, pady=(1, 0), sticky="w"
         )
         row += 1
         self.var_suffix = tk.StringVar(value=s.get("suffix", ""))
-        ctk.CTkEntry(parent, textvariable=self.var_suffix, width=220, placeholder_text="例如 _small").grid(
-            row=row, column=0, padx=12, pady=(2, 6), sticky="w"
+        ctk.CTkEntry(parent, textvariable=self.var_suffix, width=CONTROL_W, placeholder_text="例如 _small").grid(
+            row=row, column=0, padx=10, pady=(1, 4), sticky="w"
         )
         row += 1
 
         self.var_rename_skip = tk.BooleanVar(value=s.get("rename_skipped", False))
         ctk.CTkCheckBox(parent, text="未压缩文件也重命名", variable=self.var_rename_skip).grid(
-            row=row, column=0, padx=12, pady=(2, 12), sticky="w"
+            row=row, column=0, padx=10, pady=(1, 6), sticky="w"
         )
-        row += 1
-
-        # ── 尺寸调整 ────────────────────────────────────────
-        self._section_label(parent, "📐 尺寸调整", row)
         row += 1
 
         self.var_resize = tk.BooleanVar(value=s.get("resize_enabled", False))
         ctk.CTkCheckBox(
             parent, text="启用尺寸调整", variable=self.var_resize,
             command=self._toggle_resize,
-        ).grid(row=row, column=0, padx=12, pady=(2, 4), sticky="w")
+        ).grid(row=row, column=0, padx=10, pady=(1, 4), sticky="w")
         row += 1
 
         self.resize_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        self.resize_frame.grid(row=row, column=0, padx=12, pady=(0, 4), sticky="ew")
+        self.resize_frame.grid(row=row, column=0, padx=10, pady=(0, 4), sticky="ew")
 
         ctk.CTkLabel(self.resize_frame, text="宽", font=ctk.CTkFont(size=11)).pack(side="left")
         self.var_rw = tk.StringVar(value=s.get("resize_width", "800"))
-        ctk.CTkEntry(self.resize_frame, textvariable=self.var_rw, width=65).pack(side="left", padx=4)
+        ctk.CTkEntry(self.resize_frame, textvariable=self.var_rw, width=62).pack(side="left", padx=3)
         ctk.CTkLabel(self.resize_frame, text="×  高", font=ctk.CTkFont(size=11)).pack(side="left")
         self.var_rh = tk.StringVar(value=s.get("resize_height", "600"))
-        ctk.CTkEntry(self.resize_frame, textvariable=self.var_rh, width=65).pack(side="left", padx=4)
+        ctk.CTkEntry(self.resize_frame, textvariable=self.var_rh, width=62).pack(side="left", padx=3)
         row += 1
 
         ctk.CTkLabel(
             parent, text="不符合比例时用图片主色填充",
             font=ctk.CTkFont(size=10), text_color="gray",
-        ).grid(row=row, column=0, padx=12, pady=(0, 12), sticky="w")
+        ).grid(row=row, column=0, padx=10, pady=(0, 6), sticky="w")
         row += 1
 
         self._toggle_resize()
-
-        # ── 导出路径 ─────────────────────────────────────────
-        self._section_label(parent, "📂 导出路径", row)
-        row += 1
 
         self.var_custom_out = tk.BooleanVar(value=s.get("custom_output_enabled", False))
         ctk.CTkCheckBox(
             parent, text="自定义导出文件夹", variable=self.var_custom_out,
             command=self._toggle_output,
-        ).grid(row=row, column=0, padx=12, pady=(2, 4), sticky="w")
+        ).grid(row=row, column=0, padx=10, pady=(1, 4), sticky="w")
         row += 1
 
         self.custom_output_path = s.get("custom_output_path", "")
         self.lbl_out_path = ctk.CTkLabel(
-            parent, text=self._output_display_text(), wraplength=210,
+            parent, text=self._output_display_text(), wraplength=220,
             font=ctk.CTkFont(size=10), text_color="gray",
         )
-        self.lbl_out_path.grid(row=row, column=0, padx=12, pady=(0, 8), sticky="w")
+        self.lbl_out_path.grid(row=row, column=0, padx=10, pady=(0, 5), sticky="w")
         row += 1
 
         # ── 完成后选项 ───────────────────────────────────────
@@ -282,7 +258,7 @@ class ImageCompressorApp(ctk.CTk):
 
         self.var_auto_open = tk.BooleanVar(value=s.get("auto_open_folder", True))
         ctk.CTkCheckBox(parent, text="压缩完成后打开文件夹", variable=self.var_auto_open).grid(
-            row=row, column=0, padx=12, pady=(2, 8), sticky="w"
+            row=row, column=0, padx=10, pady=(1, 6), sticky="w"
         )
 
     @staticmethod
@@ -291,7 +267,7 @@ class ImageCompressorApp(ctk.CTk):
         ctk.CTkLabel(
             parent, text=text,
             font=ctk.CTkFont(size=12, weight="bold"),
-        ).grid(row=row, column=0, padx=12, pady=(8, 2), sticky="w")
+        ).grid(row=row, column=0, padx=10, pady=(5, 1), sticky="w")
 
     # ══════════════════════════════════════════════════════════
     #  主区域
@@ -363,7 +339,7 @@ class ImageCompressorApp(ctk.CTk):
         self.file_list.grid(row=2, column=0, sticky="nsew", pady=(0, 6))
         self.file_list.grid_columnconfigure(0, weight=1)
 
-        # 绑定拖拽（简易方案：绑定drop事件如果tkinterdnd2可用）
+        # 绑定拖拽
         self._setup_dnd()
 
         # 空状态引导
@@ -373,6 +349,7 @@ class ImageCompressorApp(ctk.CTk):
             font=ctk.CTkFont(size=13), text_color="gray",
         )
         self.lbl_empty.pack(pady=50)
+        self._register_drop_target(self.lbl_empty)
 
         # ── 日志面板 ─────────────────────────────────────────
         log_frame = ctk.CTkFrame(main)
@@ -443,34 +420,40 @@ class ImageCompressorApp(ctk.CTk):
     # ══════════════════════════════════════════════════════════
 
     def _setup_dnd(self):
-        """尝试设置拖拽支持（tkinterdnd2 需要特殊基类，可能不可用）"""
+        """设置拖拽支持。"""
         try:
-            from tkinterdnd2 import DND_FILES
-            self.drop_target_register(DND_FILES)
-            self.dnd_bind("<<Drop>>", self._on_dnd_drop)
+            import tkinterdnd2.TkinterDnD as tkdnd_module
+            from tkinterdnd2 import DND_FILES, TkinterDnD
+
+            tkdnd_module._require(self)
+            TkinterDnD.DnDWrapper()
+            self._dnd_files_type = DND_FILES
+            self._dnd_enabled = True
+
+            self._register_drop_target(self)
+            self._register_drop_target(self.file_list)
+            for attr in ("_parent_frame", "_parent_canvas", "_label"):
+                self._register_drop_target(getattr(self.file_list, attr, None))
         except Exception:
-            # tkinterdnd2 不可用或者不兼容 customtkinter，跳过拖拽功能
+            self._dnd_enabled = False
+
+    def _register_drop_target(self, widget):
+        """把控件注册为文件拖拽落点。"""
+        if not self._dnd_enabled or widget is None:
+            return
+        if not hasattr(widget, "drop_target_register") or not hasattr(widget, "dnd_bind"):
+            return
+        try:
+            widget.drop_target_register(self._dnd_files_type)
+            widget.dnd_bind("<<Drop>>", self._on_dnd_drop)
+        except Exception:
             pass
 
     def _on_dnd_drop(self, event):
         """处理拖拽放下事件"""
         try:
-            # 解析文件路径（可能有大括号包裹或空格分隔）
-            data = event.data
-            if data.startswith("{"):
-                paths = []
-                while "{" in data:
-                    start = data.index("{")
-                    end = data.index("}")
-                    paths.append(data[start + 1:end])
-                    data = data[end + 1:].strip()
-                if data:
-                    paths.extend(data.split())
-            else:
-                paths = data.split()
-
             all_images = []
-            for p in paths:
+            for p in parse_dnd_paths(event.data):
                 p = p.strip()
                 if os.path.isdir(p):
                     all_images.extend(Compressor.scan_folder(p, recursive=True))
@@ -567,6 +550,7 @@ class ImageCompressorApp(ctk.CTk):
                 font=ctk.CTkFont(size=13), text_color="gray",
             )
             self.lbl_empty.pack(pady=50)
+            self._register_drop_target(self.lbl_empty)
             return
 
         for i, f in enumerate(self.selected_files):
@@ -577,6 +561,7 @@ class ImageCompressorApp(ctk.CTk):
                     text_color="gray", font=ctk.CTkFont(size=11),
                 )
                 more_lbl.pack(anchor="w", padx=8, pady=4)
+                self._register_drop_target(more_lbl)
                 break
 
             self._create_file_row(f, i)
@@ -626,6 +611,10 @@ class ImageCompressorApp(ctk.CTk):
         for child in row.winfo_children():
             child.bind("<Button-3>", lambda e, m=menu: m.tk_popup(e.x_root, e.y_root))
 
+        self._register_drop_target(row)
+        for child in row.winfo_children():
+            self._register_drop_target(child)
+
         self._file_widgets.append(row)
 
     def _load_thumbnail_async(self, filepath: str, label: ctk.CTkLabel):
@@ -659,13 +648,12 @@ class ImageCompressorApp(ctk.CTk):
             target_size = float(self.var_target.get())
             min_size = float(self.var_min.get())
         except ValueError:
-            messagebox.showerror("输入错误", "目标大小和忽略大小必须为有效数字。")
+            messagebox.showerror("输入错误", "目标文件大小和忽略大小必须为有效数字。")
             return
 
         fmt = self.var_format.get()
         prefix = self.var_prefix.get()
         suffix = self.var_suffix.get()
-        quality = self.var_quality.get()
 
         renaming_rules = {
             "prefix": prefix,
@@ -699,7 +687,7 @@ class ImageCompressorApp(ctk.CTk):
 
         thread = threading.Thread(
             target=self._run_compression,
-            args=(target_size, min_size, fmt, renaming_rules, resize_options, quality),
+            args=(target_size, min_size, fmt, renaming_rules, resize_options),
             daemon=True,
         )
         thread.start()
@@ -710,10 +698,10 @@ class ImageCompressorApp(ctk.CTk):
         self._log("\n⚠ 用户请求取消，正在停止...\n")
         self.lbl_status.configure(text="⏳ 正在停止...")
 
-    def _run_compression(self, target_size, min_size, fmt, renaming_rules, resize_options, quality):
+    def _run_compression(self, target_size, min_size, fmt, renaming_rules, resize_options):
         total = len(self.selected_files)
         stats = {"success": 0, "skipped": 0, "error": 0}
-        total_saved = 0
+        total_delta = 0
         output_folders = set()
 
         start_time = time.time()
@@ -739,14 +727,12 @@ class ImageCompressorApp(ctk.CTk):
                 output_format=fmt,
                 renaming_rules=renaming_rules,
                 resize_options=resize_options,
-                quality=quality if target_size <= 0 else None,
             )
 
             fname = os.path.basename(file_path)
             if result.status == "SUCCESS":
                 stats["success"] += 1
-                saved = result.original_size - result.output_size
-                total_saved += max(0, saved)
+                total_delta += result.original_size - result.output_size
                 ratio = calc_compression_ratio(result.original_size, result.output_size)
                 self._log(
                     f"✅ {fname}  {format_size(result.original_size)} → {result.detail}  ({ratio})"
@@ -769,14 +755,14 @@ class ImageCompressorApp(ctk.CTk):
             f"  📊 处理完成{'（已取消）' if self.compressor.stop_requested else ''}\n"
             f"  ✅ 成功: {stats['success']}  ⏭ 跳过: {stats['skipped']}  ❌ 失败: {stats['error']}\n"
             f"  📦 共计: {total} 张图片  ⏱ 用时: {elapsed:.1f}s\n"
-            f"  💾 节省空间: {format_size(total_saved)}\n"
+            f"  💾 空间变化: {self._format_size_delta(total_delta)}\n"
             f"{'━' * 40}"
         )
         self._log(summary)
 
         # 更新统计标签
         self.after(0, lambda: self.lbl_stats.configure(
-            text=f"✅{stats['success']}  ⏭{stats['skipped']}  ❌{stats['error']}  💾{format_size(total_saved)}"
+            text=f"✅{stats['success']}  ⏭{stats['skipped']}  ❌{stats['error']}  💾{self._format_size_delta(total_delta)}"
         ))
 
         self.after(0, lambda: self._finish_compression(output_folders))
@@ -786,6 +772,14 @@ class ImageCompressorApp(ctk.CTk):
         pct = int(value * 100)
         self.lbl_percent.configure(text=f"{pct}%")
         self.lbl_status.configure(text=f"⏳ 处理中: {current} / {total}")
+
+    @staticmethod
+    def _format_size_delta(delta_bytes: int) -> str:
+        if delta_bytes > 0:
+            return f"节省 {format_size(delta_bytes)}"
+        if delta_bytes < 0:
+            return f"增加 {format_size(abs(delta_bytes))}"
+        return "无变化"
 
     def _finish_compression(self, output_folders: set):
         self.processing = False
@@ -835,10 +829,6 @@ class ImageCompressorApp(ctk.CTk):
     #  UI 切换
     # ══════════════════════════════════════════════════════════
 
-    def _on_quality_change(self, value):
-        """质量滑块变化回调"""
-        self.lbl_quality.configure(text=f"{int(value)}%")
-
     def _toggle_theme(self, value):
         """深色/浅色主题切换"""
         ctk.set_appearance_mode(value)
@@ -886,7 +876,6 @@ class ImageCompressorApp(ctk.CTk):
             "target_size": self.var_target.get(),
             "min_size": self.var_min.get(),
             "output_format": self.var_format.get(),
-            "quality_slider": self.var_quality.get(),
             "prefix": self.var_prefix.get(),
             "suffix": self.var_suffix.get(),
             "rename_skipped": self.var_rename_skip.get(),

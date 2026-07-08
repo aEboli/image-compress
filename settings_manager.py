@@ -9,14 +9,13 @@ SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settin
 
 DEFAULT_SETTINGS = {
     # 窗口
-    "geometry": "1050x720",
+    "geometry": "1180x760",
     "window_x": None,
     "window_y": None,
     # 压缩
     "target_size": "1.0",
     "min_size": "0.1",
     "output_format": "Original",
-    "quality_slider": 85,
     # 重命名
     "prefix": "",
     "suffix": "",

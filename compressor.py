@@ -1,5 +1,5 @@
 """
-图片压缩引擎 — 支持多格式、尺寸调整、主色补白、二分质量搜索、直接质量控制
+图片压缩引擎 — 支持多格式、尺寸调整、主色补白、二分质量搜索
 """
 import os
 import io
@@ -80,13 +80,9 @@ class Compressor:
         output_format: str = "Original",
         renaming_rules: dict | None = None,
         resize_options: dict | None = None,
-        quality: int | None = None,
     ) -> CompressResult:
         """
         压缩单张图片。
-
-        Args:
-            quality: 直接指定质量(1-100)。若为 None 则使用二分搜索(有目标大小时)或默认85。
 
         Returns:
             CompressResult 对象
@@ -171,20 +167,18 @@ class Compressor:
             target_bytes = target_size_mb * 1024 * 1024
 
             if save_format in QUALITY_FORMATS:
-                if quality is not None and target_bytes <= 0:
-                    # 用户直接指定质量，不使用二分搜索
-                    q = max(1, min(100, quality))
-                    img.save(output_path, format=save_format, quality=q, optimize=True)
-                elif target_bytes > 0:
+                if target_bytes > 0:
                     # 有目标大小时使用二分搜索
                     q = self._binary_search_quality(img, save_format, target_bytes)
                     img.save(output_path, format=save_format, quality=q, optimize=True)
                 else:
-                    # 无目标大小也无指定质量
-                    q = quality if quality else 85
-                    img.save(output_path, format=save_format, quality=q, optimize=True)
+                    # 无目标大小时使用默认质量
+                    img.save(output_path, format=save_format, quality=85, optimize=True)
             elif save_format == "PNG":
-                img.save(output_path, format="PNG", optimize=True)
+                if target_bytes > 0:
+                    self._save_png_for_target_size(img, output_path, int(target_bytes))
+                else:
+                    img.save(output_path, format="PNG", optimize=True, compress_level=9)
             elif save_format == "GIF" and is_animated:
                 # 保存 GIF 动画
                 frames = []
@@ -236,6 +230,60 @@ class Compressor:
                 high = mid - 1
 
         return best_quality
+
+    # ── PNG 目标大小搜索 ─────────────────────────────────────
+
+    @staticmethod
+    def _save_png_for_target_size(
+        img: Image.Image, output_path: str, target_bytes: int
+    ) -> None:
+        if target_bytes <= 0:
+            img.save(output_path, format="PNG", optimize=True, compress_level=9)
+            return
+
+        candidates: list[tuple[int, bytes]] = []
+        original_buf = io.BytesIO()
+        img.save(original_buf, format="PNG", optimize=True, compress_level=9)
+        candidates.append((original_buf.tell(), original_buf.getvalue()))
+
+        has_alpha = img.mode in ("RGBA", "LA") or (
+            img.mode == "P" and "transparency" in img.info
+        )
+        if has_alpha:
+            search_img = img.convert("RGBA")
+            quantize_method = Image.Quantize.FASTOCTREE
+        else:
+            search_img = img.convert("RGB") if img.mode != "RGB" else img
+            quantize_method = Image.Quantize.MEDIANCUT
+        low, high = 2, 256
+        best_under: tuple[int, bytes] | None = None
+
+        while low <= high:
+            colors = (low + high) // 2
+            quantized = search_img.quantize(
+                colors=colors,
+                method=quantize_method,
+                dither=Image.Dither.FLOYDSTEINBERG,
+            )
+            buf = io.BytesIO()
+            quantized.save(buf, format="PNG", optimize=True, compress_level=9)
+            size = buf.tell()
+            data = buf.getvalue()
+            candidates.append((size, data))
+
+            if size <= target_bytes:
+                best_under = (size, data)
+                low = colors + 1
+            else:
+                high = colors - 1
+
+        if best_under is not None:
+            output_data = best_under[1]
+        else:
+            output_data = min(candidates, key=lambda item: item[0])[1]
+
+        with open(output_path, "wb") as f:
+            f.write(output_data)
 
     # ── 复制并重命名（用于跳过的文件） ────────────────────────
 
